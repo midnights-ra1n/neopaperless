@@ -1,0 +1,4 @@
+#!/bin/sh
+set -e
+[ -d /run/systemd/system ] && systemctl daemon-reload || true
+# Documents in /var/lib/neopaperless are kept, even on purge, to never lose user data.

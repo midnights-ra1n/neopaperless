@@ -1,0 +1,9 @@
+# Configuration de NeoPaperless (redémarrer le service après modification)
+PORT=3001
+HOST=0.0.0.0
+DATA_DIR=/var/lib/neopaperless
+NODE_ENV=production
+# Langues OCR pour les images (paquets tesseract-ocr-*)
+OCR_LANG=fra+eng
+# Mettre à 1 derrière un reverse proxy (nginx, Caddy...)
+TRUST_PROXY=0

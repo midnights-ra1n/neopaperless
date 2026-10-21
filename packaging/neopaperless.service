@@ -1,0 +1,19 @@
+[Unit]
+Description=NeoPaperless - gestion de documents
+After=network.target
+
+[Service]
+User=neopaperless
+Group=neopaperless
+EnvironmentFile=/etc/default/neopaperless
+WorkingDirectory=/opt/neopaperless
+ExecStart=/opt/neopaperless/node/bin/node --disable-warning=ExperimentalWarning server/index.js
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/neopaperless
+
+[Install]
+WantedBy=multi-user.target

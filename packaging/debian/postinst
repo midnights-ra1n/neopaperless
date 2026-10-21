@@ -1,0 +1,16 @@
+#!/bin/sh
+set -e
+if [ "$1" = "configure" ]; then
+  if ! getent passwd neopaperless >/dev/null; then
+    adduser --system --group --home /var/lib/neopaperless --no-create-home neopaperless
+  fi
+  mkdir -p /var/lib/neopaperless
+  chown neopaperless:neopaperless /var/lib/neopaperless
+  chmod 750 /var/lib/neopaperless
+  if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload
+    systemctl enable neopaperless.service >/dev/null
+    # Restart picks up the new version on upgrades; schema migrations run at startup.
+    systemctl restart neopaperless.service
+  fi
+fi
