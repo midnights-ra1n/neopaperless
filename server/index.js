@@ -81,7 +81,7 @@ function recordFailure(ip) {
 }
 
 // ---------- documents ----------
-const DOC_COLUMNS = `d.id, d.title, d.filename, d.mime, d.size, d.doc_date, d.added_at, d.notes,
+const DOC_COLUMNS = `d.id, d.title, d.filename, d.mime, d.size, d.doc_date, d.added_at, d.notes, d.folder_id,
   (SELECT json_group_array(tag_id) FROM document_tags WHERE document_id = d.id) AS tags`;
 
 function rowToDoc(row) {
@@ -98,6 +98,11 @@ function setTags(docId, tagIds) {
   db.prepare('DELETE FROM document_tags WHERE document_id = ?').run(docId);
   const insert = db.prepare('INSERT OR IGNORE INTO document_tags (document_id, tag_id) SELECT ?, id FROM tags WHERE id = ?');
   for (const tagId of tagIds) insert.run(docId, Number(tagId));
+}
+
+// Returns the id if that folder exists, else null (no folder).
+function folderId(value) {
+  return db.prepare('SELECT id FROM folders WHERE id = ?').get(Number(value) || 0)?.id ?? null;
 }
 
 function sendFile(res, doc, download) {
@@ -252,6 +257,7 @@ export function createApp() {
   api.get('/documents', (req, res) => {
     const q = ftsQuery(String(req.query.q || ''));
     const tag = Number(req.query.tag) || null;
+    const folder = Number(req.query.folder) || null;
     const where = [], params = [];
     let from = 'documents d', extra = '', order = 'COALESCE(d.doc_date, d.added_at) DESC, d.id DESC';
     if (q) {
@@ -265,6 +271,12 @@ export function createApp() {
     if (tag) {
       where.push('d.id IN (SELECT document_id FROM document_tags WHERE tag_id = ?)');
       params.push(tag);
+    }
+    if (folder) {
+      // A folder shows its subfolders' documents too.
+      where.push(`d.folder_id IN (WITH RECURSIVE sub(id) AS (
+        SELECT ? UNION SELECT f.id FROM folders f JOIN sub ON f.parent_id = sub.id) SELECT id FROM sub)`);
+      params.push(folder);
     }
     const sql = `SELECT ${DOC_COLUMNS}${extra} FROM ${from} ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
                  ORDER BY ${order} LIMIT 1000`;
@@ -291,8 +303,8 @@ export function createApp() {
     }
     const [content] = await Promise.all([extractText(filePath, mime), makeThumbnail(filePath, mime)]);
     const title = path.basename(filename, path.extname(filename)).replace(/[_-]+/g, ' ').trim() || filename;
-    const { lastInsertRowid } = db.prepare(`INSERT INTO documents (title, filename, stored_name, mime, size, sha256, content)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(title, filename, storedName, mime, size, sha256, content);
+    const { lastInsertRowid } = db.prepare(`INSERT INTO documents (title, filename, stored_name, mime, size, sha256, content, folder_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(title, filename, storedName, mime, size, sha256, content, folderId(req.headers['x-folder']));
     const tags = String(req.headers['x-tags'] || '').split(',').filter(Boolean);
     setTags(lastInsertRowid, tags);
     res.status(201).json(rowToDoc(getDoc(lastInsertRowid)));
@@ -312,7 +324,8 @@ export function createApp() {
     const title = b.title !== undefined ? String(b.title).trim() || doc.title : doc.title;
     const notes = b.notes !== undefined ? String(b.notes) : doc.notes;
     const docDate = b.doc_date !== undefined ? (/^\d{4}-\d{2}-\d{2}$/.test(b.doc_date) ? b.doc_date : null) : doc.doc_date;
-    db.prepare('UPDATE documents SET title = ?, notes = ?, doc_date = ? WHERE id = ?').run(title, notes, docDate, doc.id);
+    const folder = b.folder_id !== undefined ? folderId(b.folder_id) : doc.folder_id;
+    db.prepare('UPDATE documents SET title = ?, notes = ?, doc_date = ?, folder_id = ? WHERE id = ?').run(title, notes, docDate, folder, doc.id);
     if (Array.isArray(b.tags)) setTags(doc.id, b.tags);
     res.json(rowToDoc(getDoc(doc.id)));
   });
@@ -393,6 +406,47 @@ export function createApp() {
 
   api.delete('/tags/:id', (req, res) => {
     db.prepare('DELETE FROM tags WHERE id = ?').run(req.params.id);
+    res.json({ ok: true });
+  });
+
+  api.get('/folders', (req, res) => {
+    res.json(db.prepare(`WITH RECURSIVE tree(root, id) AS (
+        SELECT id, id FROM folders UNION SELECT t.root, f.id FROM folders f JOIN tree t ON f.parent_id = t.id)
+      SELECT f.*, (SELECT count(*) FROM documents d JOIN tree t ON d.folder_id = t.id WHERE t.root = f.id) AS count
+      FROM folders f ORDER BY f.name`).all());
+  });
+
+  api.post('/folders', json, (req, res) => {
+    const name = String(req.body?.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'Nom requis' });
+    const parentId = folderId(req.body?.parent_id);
+    try {
+      const { lastInsertRowid } = db.prepare('INSERT INTO folders (name, parent_id) VALUES (?, ?)').run(name, parentId);
+      res.status(201).json({ id: lastInsertRowid, name, parent_id: parentId, count: 0 });
+    } catch {
+      res.status(409).json({ error: 'Ce dossier existe déjà ici' });
+    }
+  });
+
+  api.patch('/folders/:id', json, (req, res) => {
+    const folder = db.prepare('SELECT * FROM folders WHERE id = ?').get(req.params.id);
+    if (!folder) return res.status(404).json({ error: 'Introuvable' });
+    const name = String(req.body?.name ?? folder.name).trim() || folder.name;
+    const parentId = req.body?.parent_id !== undefined ? folderId(req.body.parent_id) : folder.parent_id;
+    // Walk up from the new parent: meeting the folder itself would create a cycle.
+    for (let id = parentId; id; id = db.prepare('SELECT parent_id FROM folders WHERE id = ?').get(id).parent_id)
+      if (id === folder.id) return res.status(400).json({ error: 'Un dossier ne peut pas être déplacé dans lui-même' });
+    try {
+      db.prepare('UPDATE folders SET name = ?, parent_id = ? WHERE id = ?').run(name, parentId, folder.id);
+    } catch {
+      return res.status(409).json({ error: 'Ce dossier existe déjà ici' });
+    }
+    res.json({ ...folder, name, parent_id: parentId });
+  });
+
+  // Subfolders go with it (cascade); their documents stay, without a folder.
+  api.delete('/folders/:id', (req, res) => {
+    db.prepare('DELETE FROM folders WHERE id = ?').run(req.params.id);
     res.json({ ok: true });
   });
 

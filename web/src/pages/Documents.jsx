@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useOutletContext, useSearchParams } from 'react-router-dom';
-import { FileText, Image, FileQuestion, Inbox } from 'lucide-react';
-import { api, formatDate } from '../api.js';
+import { ArrowLeft, Folder, FileText, Image, FileQuestion, Inbox } from 'lucide-react';
+import { api, flattenFolders, formatDate } from '../api.js';
 
 // Server wraps matches in \u0002…\u0003; rendering them as <mark> elements avoids injecting document text as HTML.
 function Snippet({ text }) {
@@ -16,6 +16,8 @@ function Thumb({ doc }) {
     className="h-full w-full object-cover object-top transition duration-300 group-hover:scale-[1.03]" />;
 }
 
+const folderChip = 'inline-flex shrink-0 items-center gap-1.5 rounded-full bg-zinc-200/60 px-3 py-1.5 text-xs font-medium dark:bg-zinc-800';
+
 export function TagChip({ tag, active, onClick }) {
   const Comp = onClick ? 'button' : 'span';
   return (
@@ -29,24 +31,42 @@ export function TagChip({ tag, active, onClick }) {
   );
 }
 
+export function FolderSelect({ folders, ...props }) {
+  return (
+    <select className="input" {...props}>
+      <option value="">Aucun dossier</option>
+      {flattenFolders(folders).map((f) => <option key={f.id} value={f.id}>{'\u00a0\u00a0\u00a0'.repeat(f.depth)}{f.name}</option>)}
+    </select>
+  );
+}
+
 export default function Documents() {
-  const { tags, revision } = useOutletContext();
+  const { tags, folders, revision } = useOutletContext();
   const [params, setParams] = useSearchParams();
   const [docs, setDocs] = useState(null);
   const q = params.get('q') || '';
   const tag = params.get('tag');
+  const folder = params.get('folder');
 
   useEffect(() => {
     const search = new URLSearchParams();
     if (q) search.set('q', q);
     if (tag) search.set('tag', tag);
+    if (folder) search.set('folder', folder);
     let stale = false;
     api(`/documents?${search}`).then((d) => !stale && setDocs(d));
     return () => { stale = true; };
-  }, [q, tag, revision]);
+  }, [q, tag, folder, revision]);
 
   const tagById = Object.fromEntries(tags.map((t) => [t.id, t]));
   const current = tag && tagById[tag];
+  const currentFolder = folders.find((f) => String(f.id) === folder);
+  const parentFolder = folders.find((f) => f.id === currentFolder?.parent_id);
+  const openFolder = (id) => {
+    const next = new URLSearchParams(params);
+    id ? next.set('folder', id) : next.delete('folder');
+    setParams(next);
+  };
   const toggleTag = (id) => {
     const next = new URLSearchParams(params);
     tag === String(id) ? next.delete('tag') : next.set('tag', id);
@@ -58,13 +78,27 @@ export default function Documents() {
       <div className="mb-5 flex items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">
-            {q ? `Résultats pour « ${q} »` : current ? current.name : 'Tous les documents'}
+            {q ? `Résultats pour « ${q} »` : currentFolder?.name ?? current?.name ?? 'Tous les documents'}
           </h1>
           <p className="text-sm text-zinc-500">{docs ? `${docs.length} document${docs.length > 1 ? 's' : ''}` : 'Chargement…'}</p>
         </div>
       </div>
 
-      <div className="-mx-4 mb-6 flex gap-2 overflow-x-auto px-4 pb-1 md:hidden">
+      {/* The sidebar is hidden on mobile: browse the tree one level at a time here. */}
+      <div className="-mx-4 mb-3 flex gap-2 overflow-x-auto px-4 pb-1 md:hidden">
+        {currentFolder && (
+          <button type="button" className={folderChip} onClick={() => openFolder(parentFolder?.id)}>
+            <ArrowLeft size={14} /> {parentFolder?.name ?? 'Tous les documents'}
+          </button>
+        )}
+        {folders.filter((f) => f.parent_id === (currentFolder?.id ?? null)).map((f) => (
+          <button type="button" key={f.id} className={folderChip} onClick={() => openFolder(f.id)}>
+            <Folder size={14} /> {f.name}
+          </button>
+        ))}
+      </div>
+
+      <div className="-mx-4 mb-6 flex gap-2 overflow-x-auto px-4 pb-1">
         {tags.map((t) => <TagChip key={t.id} tag={t} active={tag ? tag === String(t.id) : undefined} onClick={() => toggleTag(t.id)} />)}
       </div>
 

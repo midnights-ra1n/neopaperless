@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useState } from 'react';
 import { Link, useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import { ArrowLeft, Download, Share2, Trash2, Copy, Check, X, Save, Link2 } from 'lucide-react';
 import { api, send, formatDate, formatSize } from '../api.js';
-import { TagChip } from './Documents.jsx';
+import { FolderSelect, TagChip } from './Documents.jsx';
 
 const PdfViewer = lazy(() => import('../components/PdfViewer.jsx'));
 
@@ -83,7 +83,7 @@ function ShareDialog({ doc, onClose }) {
 export default function DocumentView() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { tags, changed } = useOutletContext();
+  const { tags, folders, changed } = useOutletContext();
   const [doc, setDoc] = useState(null);
   const [form, setForm] = useState(null);
   const [error, setError] = useState('');
@@ -93,7 +93,7 @@ export default function DocumentView() {
   useEffect(() => {
     api(`/documents/${id}`).then((d) => {
       setDoc(d);
-      setForm({ title: d.title, notes: d.notes, doc_date: d.doc_date || '', tags: d.tags });
+      setForm({ title: d.title, notes: d.notes, doc_date: d.doc_date || '', folder_id: d.folder_id ?? '', tags: d.tags });
     }, (e) => setError(e.message));
   }, [id]);
 
@@ -101,6 +101,7 @@ export default function DocumentView() {
   if (!doc) return null;
 
   const dirty = form.title !== doc.title || form.notes !== doc.notes || form.doc_date !== (doc.doc_date || '')
+    || form.folder_id !== (doc.folder_id ?? '')
     || [...form.tags].sort().join() !== [...doc.tags].sort().join();
   const toggle = (tagId) => setForm({ ...form, tags: form.tags.includes(tagId) ? form.tags.filter((t) => t !== tagId) : [...form.tags, tagId] });
 
@@ -144,6 +145,11 @@ export default function DocumentView() {
             <div>
               <label className="label" htmlFor="date">Date du document</label>
               <input id="date" type="date" className="input" value={form.doc_date} onChange={(e) => setForm({ ...form, doc_date: e.target.value })} />
+            </div>
+            <div>
+              <label className="label" htmlFor="folder">Dossier</label>
+              <FolderSelect id="folder" folders={folders} value={form.folder_id}
+                onChange={(e) => setForm({ ...form, folder_id: Number(e.target.value) || '' })} />
             </div>
             <div>
               <p className="label">Tags</p>

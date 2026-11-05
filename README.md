@@ -9,7 +9,7 @@ React + TailwindCSS + SQLite, responsive et installable en PWA. Aucune ressource
 - **Ajout** par glisser-déposer ou bouton (plusieurs fichiers à la fois, progression, détection des doublons).
 - **Recherche plein texte** dans le contenu des PDF (`pdftotext`) et des images (OCR `tesseract` si installé), avec mise en évidence des passages et insensible aux accents (SQLite FTS5).
 - **Lecteur PDF** intégré (pdf.js, fonctionne aussi sur mobile), aperçus en miniature.
-- **Classement** par tags colorés, date du document et notes.
+- **Classement** par dossiers en arborescence, tags colorés sur chaque document, date et notes.
 - **Téléchargement et partage** par lien public révocable, avec expiration optionnelle.
 - **Sauvegarde / restauration** complète (base SQLite + fichiers) en une archive `.tar.gz`.
 - **Mises à jour** : vérification de nouvelle version depuis les paramètres ; migrations de schéma automatiques au démarrage.

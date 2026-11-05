@@ -33,14 +33,28 @@ test('setup, upload, search, share, backup, restore', async (t) => {
   assert.equal((await call('/api/setup', json({ username: 'admin', password: 'motdepasse1' }))).status, 200);
   assert.equal((await call('/api/setup', json({ username: 'x', password: 'motdepasse1' }))).status, 403);
 
+  const patch = (body) => ({ ...json(body), method: 'PATCH' });
+  assert.deepEqual((await (await call('/api/folders')).json()).map((f) => f.name), ['Bulletins de paie', 'Factures', 'Notices']);
+  assert.equal((await (await call('/api/tags')).json()).length, 0);
+  const factures = (await (await call('/api/folders')).json()).find((f) => f.name === 'Factures');
+  const sub = await (await call('/api/folders', json({ name: '2024', parent_id: factures.id }))).json();
+  const leaf = await (await call('/api/folders', json({ name: 'Octobre', parent_id: sub.id }))).json();
+  assert.equal((await call('/api/folders', json({ name: '2024', parent_id: factures.id }))).status, 409);
+  assert.equal((await call('/api/folders', json({ name: 'factures' }))).status, 409);
+  assert.equal((await call('/api/folders', json({ name: '2024' }))).status, 201);
+  assert.equal((await call(`/api/folders/${factures.id}`, patch({ parent_id: leaf.id }))).status, 400);
+  assert.equal((await call(`/api/folders/${factures.id}`, patch({ parent_id: factures.id }))).status, 400);
+  const amazon = await (await call('/api/tags', json({ name: 'Amazon' }))).json();
+
   const up = await call('/api/documents', {
     method: 'POST', body: 'Facture électricité octobre, montant 42 euros',
-    headers: { 'content-type': 'text/plain', 'x-filename': encodeURIComponent('facture_edf.txt'), 'x-tags': '1' },
+    headers: { 'content-type': 'text/plain', 'x-filename': encodeURIComponent('facture_edf.txt'), 'x-tags': amazon.id, 'x-folder': sub.id },
   });
   assert.equal(up.status, 201);
   const doc = await up.json();
   assert.equal(doc.title, 'facture edf');
-  assert.deepEqual(doc.tags, [1]);
+  assert.deepEqual(doc.tags, [amazon.id]);
+  assert.equal(doc.folder_id, sub.id);
 
   const dup = await call('/api/documents', {
     method: 'POST', body: 'Facture électricité octobre, montant 42 euros',
@@ -52,7 +66,11 @@ test('setup, upload, search, share, backup, restore', async (t) => {
   assert.equal(hits.length, 1);
   assert.match(hits[0].snippet, /\u0002électricité\u0003/);
   assert.equal((await (await call('/api/documents?q=gaz')).json()).length, 0);
-  assert.equal((await (await call('/api/documents?tag=2')).json()).length, 0);
+  assert.equal((await (await call(`/api/documents?tag=${amazon.id + 1}`)).json()).length, 0);
+  // Parent folders include subfolder documents, in the list and in the count; filters combine.
+  assert.equal((await (await call(`/api/documents?folder=${factures.id}&tag=${amazon.id}&q=facture`)).json()).length, 1);
+  assert.equal((await (await call(`/api/documents?folder=${leaf.id}`)).json()).length, 0);
+  assert.equal((await (await call('/api/folders')).json()).find((f) => f.id === factures.id).count, 1);
 
   const html = await call('/api/documents', {
     method: 'POST', body: '<script>alert(1)</script>', headers: { 'content-type': 'text/html', 'x-filename': 'x.html' },
@@ -74,4 +92,11 @@ test('setup, upload, search, share, backup, restore', async (t) => {
   const restored = await (await call('/api/documents?q=facture')).json();
   assert.equal(restored.length, 1);
   assert.equal(await (await call(`/api/documents/${restored[0].id}/file`)).text(), 'Facture électricité octobre, montant 42 euros');
+
+  // Deleting a folder removes its subfolders but keeps their documents, without a folder.
+  await call(`/api/folders/${factures.id}`, { method: 'DELETE' });
+  assert.equal((await (await call('/api/folders')).json()).some((f) => f.id === sub.id), false);
+  const kept = await (await call(`/api/documents/${restored[0].id}`)).json();
+  assert.equal(kept.folder_id, null);
+  assert.equal((await (await call('/api/documents?q=electricite')).json()).length, 1);
 });

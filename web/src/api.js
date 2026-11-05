@@ -28,6 +28,12 @@ export function upload(path, file, { headers = {}, onProgress } = {}) {
   });
 }
 
+// Depth-first list with each folder's depth, for indented lists and selects.
+export function flattenFolders(folders, parent = null, depth = 0) {
+  return folders.filter((f) => f.parent_id === parent)
+    .flatMap((f) => [{ ...f, depth }, ...flattenFolders(folders, f.id, depth + 1)]);
+}
+
 export const formatSize = (n) =>
   n < 1024 ? `${n} o` : n < 1048576 ? `${(n / 1024).toFixed(0)} Ko` : `${(n / 1048576).toFixed(1)} Mo`;
 

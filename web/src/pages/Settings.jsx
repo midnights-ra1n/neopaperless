@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
-import { Plus, Trash2, Download, Upload, RefreshCw, KeyRound, Tags, DatabaseBackup, Sparkles, Loader2 } from 'lucide-react';
-import { api, send, upload } from '../api.js';
+import { Plus, Trash2, Download, Upload, RefreshCw, KeyRound, Tags, Folder, DatabaseBackup, Sparkles, Loader2 } from 'lucide-react';
+import { api, send, upload, flattenFolders } from '../api.js';
+import { FolderSelect } from './Documents.jsx';
 
 function Section({ icon: Icon, title, children }) {
   return (
@@ -18,6 +19,39 @@ function Section({ icon: Icon, title, children }) {
 function Message({ msg }) {
   if (!msg) return null;
   return <p role="status" className={`mt-3 text-sm ${msg.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'}`}>{msg.text}</p>;
+}
+
+function FoldersSection() {
+  const { folders, changed } = useOutletContext();
+  const [name, setName] = useState('');
+  const [parent, setParent] = useState('');
+  const [msg, setMsg] = useState(null);
+  const run = (p) => { setMsg(null); return p.then(changed).catch((e) => { setMsg({ text: e.message }); throw e; }); };
+
+  return (
+    <Section icon={Folder} title="Dossiers">
+      <ul className="mb-4 divide-y divide-zinc-100 dark:divide-zinc-800">
+        {flattenFolders(folders).map((f) => (
+          <li key={f.id} className="flex items-center gap-2 py-2" style={{ paddingLeft: `${f.depth}rem` }}>
+            <input className="input py-1.5" aria-label="Nom du dossier" defaultValue={f.name}
+              onBlur={(e) => e.target.value !== f.name && run(send(`/folders/${f.id}`, { name: e.target.value }, 'PATCH')).catch(() => {})} />
+            <FolderSelect folders={folders} aria-label={`Dossier parent de ${f.name}`} value={f.parent_id ?? ''}
+              onChange={(e) => run(send(`/folders/${f.id}`, { parent_id: e.target.value }, 'PATCH')).catch(() => {})} />
+            <button className="btn-danger p-2" aria-label={`Supprimer ${f.name}`}
+              onClick={() => confirm(`Supprimer le dossier « ${f.name} » et ses sous-dossiers ? Les documents ne seront pas supprimés.`) && run(api(`/folders/${f.id}`, { method: 'DELETE' })).catch(() => {})}>
+              <Trash2 size={16} />
+            </button>
+          </li>
+        ))}
+      </ul>
+      <form className="flex flex-wrap gap-2 sm:flex-nowrap" onSubmit={(e) => { e.preventDefault(); run(send('/folders', { name, parent_id: parent })).then(() => setName(''), () => {}); }}>
+        <input className="input" placeholder="Nouveau dossier…" value={name} onChange={(e) => setName(e.target.value)} required />
+        <FolderSelect folders={folders} aria-label="Dossier parent" value={parent} onChange={(e) => setParent(e.target.value)} />
+        <button className="btn-primary shrink-0"><Plus size={16} /> Ajouter</button>
+      </form>
+      <Message msg={msg} />
+    </Section>
+  );
 }
 
 function TagsSection() {
@@ -78,7 +112,7 @@ function BackupSection() {
   return (
     <Section icon={DatabaseBackup} title="Sauvegarde & import">
       <p className="mb-4 text-sm text-zinc-500">
-        L’archive contient la base de données (documents, tags, liens de partage, comptes) et tous les fichiers.
+        L’archive contient la base de données (documents, dossiers, tags, liens de partage, comptes) et tous les fichiers.
         Importez-la sur une autre installation pour tout retrouver.
       </p>
       <div className="flex flex-wrap gap-2">
@@ -151,6 +185,7 @@ export default function Settings() {
   return (
     <div className="mx-auto max-w-3xl space-y-5">
       <h1 className="text-2xl font-semibold tracking-tight">Paramètres</h1>
+      <FoldersSection />
       <TagsSection />
       <BackupSection />
       <UpdateSection />

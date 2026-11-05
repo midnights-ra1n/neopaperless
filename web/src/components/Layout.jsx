@@ -1,10 +1,32 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useNavigate, useSearchParams, useLocation } from 'react-router-dom';
-import { FileText, Settings, Search, Upload, LogOut, X, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
+import { ChevronRight, FileText, Folder, Settings, Search, Upload, LogOut, X, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
 import { api, upload } from '../api.js';
+
+function FolderItem({ folder, folders, active, navClass, depth = 0 }) {
+  const [open, setOpen] = useState(true);
+  const children = folders.filter((f) => f.parent_id === folder.id);
+  return (
+    <>
+      <div className="flex items-center" style={{ paddingLeft: `${depth * 0.75}rem` }}>
+        <button type="button" aria-label={`${open ? 'Replier' : 'Déplier'} ${folder.name}`} aria-expanded={open} onClick={() => setOpen(!open)}
+          className={`grid h-7 w-5 shrink-0 place-items-center text-zinc-400 ${children.length ? '' : 'invisible'}`}>
+          <ChevronRight size={14} className={`transition ${open ? 'rotate-90' : ''}`} />
+        </button>
+        <NavLink to={`/?folder=${folder.id}`} className={() => `${navClass({ isActive: active === String(folder.id) })} min-w-0 flex-1 !px-2`}>
+          <Folder size={16} className="shrink-0" />
+          <span className="flex-1 truncate">{folder.name}</span>
+          <span className="text-xs text-zinc-400">{folder.count}</span>
+        </NavLink>
+      </div>
+      {open && children.map((f) => <FolderItem key={f.id} folder={f} folders={folders} active={active} navClass={navClass} depth={depth + 1} />)}
+    </>
+  );
+}
 
 export default function Layout({ user, version, onLogout }) {
   const [tags, setTags] = useState([]);
+  const [folders, setFolders] = useState([]);
   const [revision, setRevision] = useState(0);
   const [uploads, setUploads] = useState([]);
   const [dragging, setDragging] = useState(false);
@@ -13,10 +35,12 @@ export default function Layout({ user, version, onLogout }) {
   const location = useLocation();
   const [params] = useSearchParams();
   const activeTag = location.pathname === '/' ? params.get('tag') : null;
+  const activeFolder = location.pathname === '/' ? params.get('folder') : null;
 
   const reloadTags = useCallback(() => api('/tags').then(setTags), []);
-  const changed = useCallback(() => { setRevision((r) => r + 1); reloadTags(); }, [reloadTags]);
-  useEffect(() => { reloadTags(); }, [reloadTags]);
+  const reloadFolders = useCallback(() => api('/folders').then(setFolders), []);
+  const changed = useCallback(() => { setRevision((r) => r + 1); reloadTags(); reloadFolders(); }, [reloadTags, reloadFolders]);
+  useEffect(() => { reloadTags(); reloadFolders(); }, [reloadTags, reloadFolders]);
 
   // Search lives in the URL so results are linkable and survive the back button.
   const urlQuery = location.pathname === '/' ? params.get('q') || '' : null;
@@ -34,14 +58,14 @@ export default function Layout({ user, version, onLogout }) {
   }, [query]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function addFiles(files) {
-    const tagHeader = activeTag ? { 'x-tags': activeTag } : {};
+    const placement = { ...(activeTag && { 'x-tags': activeTag }), ...(activeFolder && { 'x-folder': activeFolder }) };
     for (const file of files) {
       const id = crypto.randomUUID();
       const patch = (p) => setUploads((u) => u.map((x) => (x.id === id ? { ...x, ...p } : x)));
       setUploads((u) => [...u, { id, name: file.name, progress: 0, state: 'busy' }]);
       try {
         await upload('/documents', file, {
-          headers: { 'x-filename': encodeURIComponent(file.name), ...tagHeader },
+          headers: { 'x-filename': encodeURIComponent(file.name), ...placement },
           onProgress: (progress) => patch({ progress }),
         });
         patch({ state: 'done', progress: 1 });
@@ -75,18 +99,14 @@ export default function Layout({ user, version, onLogout }) {
           <span className="text-lg font-semibold tracking-tight">NeoPaperless</span>
         </div>
         <nav className="space-y-1">
-          <NavLink to="/" end className={() => navClass({ isActive: location.pathname === '/' && !activeTag })}>
+          <NavLink to="/" end className={() => navClass({ isActive: location.pathname === '/' && !activeFolder })}>
             <FileText size={18} /> Tous les documents
           </NavLink>
         </nav>
-        <p className="mt-6 mb-2 px-3 text-xs font-medium uppercase tracking-wide text-zinc-400">Tags</p>
+        <p className="mt-6 mb-2 px-3 text-xs font-medium uppercase tracking-wide text-zinc-400">Dossiers</p>
         <nav className="-mx-1 flex-1 space-y-0.5 overflow-y-auto px-1">
-          {tags.map((t) => (
-            <NavLink key={t.id} to={`/?tag=${t.id}`} className={() => navClass({ isActive: activeTag === String(t.id) })}>
-              <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: t.color }} />
-              <span className="flex-1 truncate">{t.name}</span>
-              <span className="text-xs text-zinc-400">{t.count}</span>
-            </NavLink>
+          {folders.filter((f) => f.parent_id === null).map((f) => (
+            <FolderItem key={f.id} folder={f} folders={folders} active={activeFolder} navClass={navClass} />
           ))}
         </nav>
         <div className="mt-4 space-y-1 border-t border-zinc-200/80 pt-4 dark:border-zinc-800">
@@ -117,7 +137,7 @@ export default function Layout({ user, version, onLogout }) {
       </header>
 
       <main className="mx-auto max-w-7xl px-4 pb-28 pt-6 md:px-8 md:pb-10">
-        <Outlet context={{ tags, revision, changed, reloadTags }} />
+        <Outlet context={{ tags, folders, revision, changed, reloadTags }} />
       </main>
 
       <input ref={fileInput} type="file" multiple hidden onChange={(e) => { addFiles([...e.target.files]); e.target.value = ''; }} />

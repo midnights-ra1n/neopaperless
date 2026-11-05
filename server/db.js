@@ -7,7 +7,7 @@ export const FILES_DIR = path.join(DATA_DIR, 'documents');
 export const DB_PATH = path.join(DATA_DIR, 'neopaperless.db');
 
 // Each entry runs once, in order; PRAGMA user_version tracks progress so updates migrate old databases.
-const MIGRATIONS = [
+export const MIGRATIONS = [
   `CREATE TABLE users (
      id INTEGER PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL,
      is_admin INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT (datetime('now')));
@@ -41,6 +41,20 @@ const MIGRATIONS = [
      INSERT INTO documents_fts(rowid, title, content, notes) VALUES (new.id, new.title, new.content, new.notes);
    END;
    INSERT INTO tags (name, color) VALUES ('Factures', '#6366f1'), ('Bulletins de paie', '#10b981'), ('Notices', '#f59e0b');`,
+  // Sidebar tags were really categories: each becomes a folder and a document moves to its first one.
+  // Its other tags stay as tags, so nothing is lost; a tag used only that way does not become a folder.
+  `CREATE TABLE folders (
+     id INTEGER PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE,
+     parent_id INTEGER REFERENCES folders(id) ON DELETE CASCADE);
+   CREATE UNIQUE INDEX folders_name ON folders(COALESCE(parent_id, 0), name);
+   ALTER TABLE documents ADD COLUMN folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL;
+   CREATE INDEX documents_folder ON documents(folder_id);
+   INSERT INTO folders (id, name) SELECT id, name FROM tags;
+   UPDATE documents SET folder_id = (SELECT min(tag_id) FROM document_tags WHERE document_id = documents.id);
+   DELETE FROM document_tags WHERE tag_id = (SELECT folder_id FROM documents WHERE id = document_id);
+   DELETE FROM tags WHERE id NOT IN (SELECT tag_id FROM document_tags);
+   DELETE FROM folders WHERE id IN (SELECT id FROM tags)
+     AND id NOT IN (SELECT folder_id FROM documents WHERE folder_id IS NOT NULL);`,
 ];
 
 export let db;
