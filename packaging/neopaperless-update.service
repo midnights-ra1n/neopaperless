@@ -1,0 +1,9 @@
+[Unit]
+Description=Mise à jour automatique de NeoPaperless
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/default/neopaperless
+ExecStart=/usr/bin/neopaperless-update

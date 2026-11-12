@@ -130,24 +130,51 @@ function BackupSection() {
 function UpdateSection() {
   const [state, setState] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [waiting, setWaiting] = useState(null); // version we had when the update was requested
   async function check() {
     setBusy(true);
     setState(await api('/update').catch((e) => ({ error: e.message })));
     setBusy(false);
   }
+  useEffect(() => { check(); }, []);
+  // The service restarts during the install: poll until it answers with a new version (or says it failed).
+  useEffect(() => {
+    if (!waiting) return undefined;
+    const t = setInterval(() => api('/update/status').then((s) => {
+      if (s.current !== waiting || /^\S+ erreur/.test(s.last || '')) { setWaiting(null); check(); }
+    }, () => {}), 3000);
+    return () => clearInterval(t);
+  }, [waiting]);
+  async function install() {
+    await send('/update/install', {}).then(() => setWaiting(state.current), (e) => setState({ ...state, error: e.message }));
+  }
+  const toggleAuto = (enabled) => send('/update/auto', { enabled }, 'PUT').then(() => setState({ ...state, auto: enabled }));
   return (
     <Section icon={Sparkles} title="Mises à jour">
-      <button className="btn-ghost border border-zinc-200 dark:border-zinc-700" disabled={busy} onClick={check}>
+      {state?.mode === 'deb' && (
+        <label className="mb-4 flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={state.auto} onChange={(e) => toggleAuto(e.target.checked)} />
+          Installer automatiquement les nouvelles versions (chaque nuit)
+        </label>
+      )}
+      <button className="btn-ghost border border-zinc-200 dark:border-zinc-700" disabled={busy || !!waiting} onClick={check}>
         <RefreshCw size={16} className={busy ? 'animate-spin' : ''} /> Vérifier les mises à jour
       </button>
       {state?.error && <Message msg={{ text: state.error }} />}
       {state && !state.error && !state.available && <Message msg={{ ok: true, text: `Vous utilisez la dernière version (${state.current}).` }} />}
+      {state?.last && <p className="mt-2 text-xs text-zinc-500">Dernière opération : {state.last}</p>}
       {state?.available && (
         <div className="mt-4 rounded-xl bg-indigo-500/10 p-4 text-sm">
           <p className="font-medium">Nouvelle version disponible : {state.latest}</p>
           {state.notes && <p className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-zinc-600 dark:text-zinc-400">{state.notes}</p>}
-          <p className="mt-3 text-zinc-600 dark:text-zinc-400">Debian : <code>sudo apt install ./neopaperless_*.deb</code> · Docker : <code>docker compose pull && docker compose up -d</code></p>
-          <a className="btn-primary mt-3" href={state.url} target="_blank" rel="noreferrer">Voir la version</a>
+          {state.mode === 'deb' && (
+            <button className="btn-primary mt-3" disabled={!!waiting || state.pending} onClick={install}>
+              {waiting || state.pending ? <><Loader2 size={16} className="animate-spin" /> Installation en cours…</> : 'Installer maintenant'}
+            </button>
+          )}
+          {state.mode === 'docker' && <p className="mt-3 text-zinc-600 dark:text-zinc-400">Docker : <code>docker compose pull && docker compose up -d</code></p>}
+          {state.mode === 'manual' && <p className="mt-3 text-zinc-600 dark:text-zinc-400">Installez le nouveau paquet depuis la page de la version.</p>}
+          <a className="btn-ghost mt-3" href={state.url} target="_blank" rel="noreferrer">Voir la version</a>
         </div>
       )}
     </Section>

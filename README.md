@@ -12,7 +12,9 @@ React + TailwindCSS + SQLite, responsive et installable en PWA. Aucune ressource
 - **Classement** par dossiers en arborescence, tags colorés sur chaque document, date et notes.
 - **Téléchargement et partage** par lien public révocable, avec expiration optionnelle.
 - **Sauvegarde / restauration** complète (base SQLite + fichiers) en une archive `.tar.gz`.
-- **Mises à jour** : vérification de nouvelle version depuis les paramètres ; migrations de schéma automatiques au démarrage.
+- **Mises à jour** : migrations de schéma automatiques au démarrage.
+  - **Debian** : automatiques. Un timer systemd (`neopaperless-update.timer`, chaque nuit vers 3 h 30) télécharge le `.deb` de la dernière release pour l'architecture de la machine, vérifie sa somme SHA-256 (`SHA256SUMS` de la release), copie la base dans `/var/lib/neopaperless/backups/avant-<version>.db` (3 conservées) puis lance `apt-get install`. Le bouton « Installer maintenant » des Paramètres passe par `neopaperless-update.path` (le service web n'a aucun droit root). Désactivation : case à cocher dans les Paramètres, ou `systemctl disable --now neopaperless-update.timer`. Journal : `journalctl -u neopaperless-update`. Prérequis : le `DATA_DIR` par défaut (`/var/lib/neopaperless`). La première installation de cette fonction se fait à la main (`apt install ./neopaperless_*.deb`), les suivantes sont automatiques.
+  - **Docker** : `docker compose pull && docker compose up -d` (un conteneur ne peut pas se remplacer lui-même).
 
 ## Compatibilité Paperless-ngx
 

@@ -1,0 +1,56 @@
+#!/bin/sh
+# Met à jour NeoPaperless depuis la dernière release GitHub (paquet .deb de la bonne architecture).
+# Lancé en root par neopaperless-update.timer (chaque nuit), ou tout de suite quand l'interface crée
+# /var/lib/neopaperless/update-request (neopaperless-update.path). Le service web, lui, n'a aucun droit root.
+set -eu
+
+STATE="${DATA_DIR:-/var/lib/neopaperless}"
+REPO="${UPDATE_REPO:-midnights-ra1n/neopaperless}"
+BASE="https://github.com/$REPO/releases"
+NODE=/opt/neopaperless/node/bin/node
+
+status() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$1" > "$STATE/update-status"; echo "$1"; }
+fail() { status "erreur: $1"; exit 1; }
+
+FORCED=0
+if [ -e "$STATE/update-request" ]; then FORCED=1; rm -f "$STATE/update-request"; fi
+# Une demande manuelle passe toujours ; la nuit, le réglage de l'interface (fichier auto-update-off) fait foi.
+if [ "$FORCED" = 0 ] && [ -e "$STATE/auto-update-off" ]; then exit 0; fi
+
+ARCH="$(dpkg --print-architecture)"
+CUR="$(dpkg-query -W -f='${Version}' neopaperless)"
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+curl -fsSL --retry 3 -o "$TMP/SHA256SUMS" "$BASE/latest/download/SHA256SUMS" || fail "release introuvable ($BASE)"
+LINE="$(grep -E "  neopaperless_[0-9][^ ]*_${ARCH}\.deb\$" "$TMP/SHA256SUMS" | head -n 1)" || true
+[ -n "$LINE" ] || fail "aucun paquet $ARCH dans la dernière release"
+FILE="${LINE##* }"
+NEW="${FILE#neopaperless_}"; NEW="${NEW%_${ARCH}.deb}"
+
+if ! dpkg --compare-versions "$NEW" gt "$CUR"; then
+  status "à jour ($CUR)"
+  exit 0
+fi
+
+# Le tag de la release est v<version> : on télécharge ce fichier-là, pas "latest", pour que la somme corresponde.
+curl -fsSL --retry 3 -o "$TMP/$FILE" "$BASE/download/v$NEW/$FILE" || fail "téléchargement de $FILE impossible"
+echo "$LINE" > "$TMP/check"
+(cd "$TMP" && sha256sum -c check >/dev/null 2>&1) || fail "somme SHA-256 de $FILE invalide, installation annulée"
+
+# Les migrations de base ne sont pas réversibles : copie cohérente de la base avant d'installer (les 3 dernières sont gardées).
+if [ -f "$STATE/neopaperless.db" ] && [ -x "$NODE" ]; then
+  mkdir -p "$STATE/backups"
+  DST="$STATE/backups/avant-$NEW.db"
+  rm -f "$DST"
+  SRC="$STATE/neopaperless.db" DST="$DST" "$NODE" --disable-warning=ExperimentalWarning -e \
+    "const{DatabaseSync}=require('node:sqlite');new DatabaseSync(process.env.SRC).exec(\"VACUUM INTO '\"+process.env.DST.replaceAll(\"'\",\"''\")+\"'\")" \
+    || fail "sauvegarde de la base impossible, installation annulée"
+  chown -R neopaperless:neopaperless "$STATE/backups"
+  ls -t "$STATE"/backups/avant-*.db | tail -n +4 | xargs -r rm -f
+fi
+
+status "installation de $NEW"
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends -o Dpkg::Options::=--force-confold "$TMP/$FILE" \
+  || fail "apt-get a échoué pour $NEW (voir journalctl -u neopaperless-update)"
+status "ok: $CUR -> $NEW"

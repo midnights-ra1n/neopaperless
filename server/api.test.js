@@ -112,6 +112,12 @@ test('Paperless-ngx compatible API: token, upload, filters, storage paths', asyn
   const body = (data, method = 'POST') => ({ method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) });
 
   assert.equal((await call('/documents/')).status, 401);
+  // Swift Paperless' URL check: GET /token/ must answer 405 for a supported version and 406 above it
+  const probe = await call('/token/', { headers: { accept: 'application/json; version=9' } });
+  assert.equal(probe.status, 405);
+  assert.equal(probe.headers.get('x-api-version'), '9');
+  assert.equal(probe.headers.get('x-version'), '2.19.0');
+  assert.equal((await call('/token/', { headers: { accept: 'application/json; version=10' } })).status, 406);
   assert.equal((await call('/token/', body({ username: 'admin', password: 'mauvais' }))).status, 400);
   const { token } = await (await call('/token/', body({ username: 'admin', password: 'motdepasse1' }))).json();
   auth = { authorization: `Token ${token}` };

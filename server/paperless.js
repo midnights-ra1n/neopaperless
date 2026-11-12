@@ -9,6 +9,7 @@ import { suggest } from './matching.js';
 // Real: tags, storage paths, correspondents, document types, ASN, notes, custom fields, saved views, matching rules.
 // Empty lists: groups, mail accounts/rules, workflows, trash (deletion is permanent).
 const API_MAX = 9;
+const PAPERLESS_VERSION = '2.19.0'; // what we claim to be; the newest one whose features we all have
 const TOKEN_DAYS = 3650; // Paperless tokens never expire; apps do not re-login.
 const ACTIONS = ['add', 'change', 'delete', 'view'];
 const MODELS = ['document', 'tag', 'storagepath', 'correspondent', 'documenttype', 'savedview', 'customfield', 'user', 'group'];
@@ -38,10 +39,16 @@ export function paperlessApi(ctx) {
 
   router.use((req, res, next) => {
     // Clients negotiate with "Accept: application/json; version=N" and read the answer from x-api-version.
-    req.apiVersion = Math.min(Number(req.headers.accept?.match(/version=(\d+)/)?.[1]) || 1, API_MAX);
-    res.setHeader('X-Api-Version', req.apiVersion);
-    res.setHeader('X-Version', ctx.version);
-    res.setHeader('Access-Control-Expose-Headers', 'X-Api-Version, X-Version');
+    const asked = Number(req.headers.accept?.match(/version=(\d+)/)?.[1]) || 1;
+    // Like Paperless-ngx: both headers advertise the newest API / the Paperless version we emulate, whatever was asked.
+    // Apps gate features on them (Swift Paperless: next_asn >= 2.0, acknowledge >= 2.14, custom fields on create >= 2.19).
+    res.setHeader('X-Api-Version', API_MAX);
+    res.setHeader('X-Version', PAPERLESS_VERSION);
+    res.setHeader('X-Neopaperless-Version', ctx.version);
+    res.setHeader('Access-Control-Expose-Headers', 'X-Api-Version, X-Version, X-Neopaperless-Version');
+    // Clients probe from their newest version downwards until they get something else than 406.
+    if (asked > API_MAX) return res.status(406).json({ detail: 'Invalid version in "Accept" header.' });
+    req.apiVersion = asked;
     next();
   });
 
@@ -54,6 +61,9 @@ export function paperlessApi(ctx) {
     }
     res.json({ token: ctx.createSession(user.id, TOKEN_DAYS) });
   });
+
+  // Swift Paperless checks the server URL with GET /api/token/ and only accepts "405 Method Not Allowed".
+  router.all('/token', (req, res) => res.setHeader('Allow', 'POST, OPTIONS').status(405).json({ detail: 'Method "' + req.method + '" not allowed.' }));
 
   router.use((req, res, next) => {
     req.user = currentUser(req);
@@ -77,7 +87,7 @@ export function paperlessApi(ctx) {
   };
 
   // ----- serializers -----
-  const owner = { owner: null, user_can_change: true, is_shared_by_requester: false };
+  const owner = { owner: null, user_can_change: true, is_shared_by_requester: false, permissions: { view: { users: [], groups: [] }, change: { users: [], groups: [] } } };
   const slug = (s) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   const pTag = (t) => ({
     id: t.id, slug: slug(t.name), name: t.name, color: t.color, text_color: '#ffffff', ...MATCH(t),
@@ -584,19 +594,27 @@ export function paperlessApi(ctx) {
     res.json(ctx.createSession(req.user.id, TOKEN_DAYS, 'Profil'));
   });
 
-  // Public links reuse the native shares table; the link is served at /share/<slug>.
+  // Public links reuse the native shares table (rowid = id); the link is served at /share/<slug>.
+  const pLink = (l) => ({ id: l.id, created: iso(l.created_at), expiration: l.expires_at ? new Date(l.expires_at).toISOString() : null,
+    slug: l.token, document: l.document_id, file_version: 'archive' });
+  const LINKS = 'SELECT rowid AS id, token, document_id, expires_at, created_at FROM shares';
+  router.get('/share_links', (req, res) => res.json(paged(req, db.prepare(`${LINKS} ORDER BY rowid`).all().map(pLink))));
+  router.get('/documents/:id/share_links', (req, res) => res.json(db.prepare(`${LINKS} WHERE document_id = ?`).all(req.params.id).map(pLink)));
   router.post('/share_links', json, (req, res) => {
     const doc = getDoc(req.body?.document);
     if (!doc) return res.status(404).json({ detail: 'Not found.' });
-    const slug = crypto.randomBytes(24).toString('base64url');
     const exp = req.body?.expiration ? Date.parse(req.body.expiration) : null;
-    db.prepare('INSERT INTO shares (token, document_id, expires_at) VALUES (?, ?, ?)').run(slug, doc.id, exp || null);
-    res.status(201).json({ id: doc.id, created: new Date().toISOString(), expiration: exp ? new Date(exp).toISOString() : null,
-      slug, document: doc.id, file_version: req.body?.file_version || 'archive' });
+    const id = db.prepare('INSERT INTO shares (token, document_id, expires_at) VALUES (?, ?, ?)').run(crypto.randomBytes(24).toString('base64url'), doc.id, exp || null).lastInsertRowid;
+    res.status(201).json(pLink(db.prepare(`${LINKS} WHERE rowid = ?`).get(id)));
   });
+  router.delete('/share_links/:id', (req, res) => {
+    db.prepare('DELETE FROM shares WHERE rowid = ?').run(req.params.id);
+    res.status(204).end();
+  });
+  router.get('/config', (req, res) => res.json([]));
 
   // ----- always-empty collections and misc -----
-  for (const name of ['groups', 'share_links', 'mail_accounts', 'trash', 'mail_rules', 'workflows'])
+  for (const name of ['groups', 'mail_accounts', 'trash', 'mail_rules', 'workflows'])
     router.get(`/${name}`, (req, res) => res.json(page(req, [], 0, [])));
 
   const me = (u) => ({ id: u.id, username: u.username, is_superuser: !!u.is_admin, is_staff: !!u.is_admin, first_name: '', last_name: '', groups: [] });
@@ -607,13 +625,13 @@ export function paperlessApi(ctx) {
   }));
   router.post('/tasks/acknowledge', json, (req, res) => res.json({ result: (req.body?.tasks || []).length }));
   router.get('/status', (req, res) => res.json({
-    pngx_version: ctx.version, server_os: process.platform, install_type: 'bare-metal',
+    pngx_version: PAPERLESS_VERSION, server_os: process.platform, install_type: 'bare-metal',
     storage: { total: 0, available: 0 }, database: { type: 'sqlite', url: '', status: 'OK', error: null,
       migration_status: { latest_migration: '', unapplied_migrations: [] } },
     tasks: { redis_url: '', redis_status: 'OK', redis_error: null, celery_status: 'OK', index_status: 'OK', index_last_modified: null,
       index_error: null, classifier_status: 'OK', classifier_last_trained: null, classifier_error: null },
   }));
-  router.get('/remote_version', (req, res) => res.json({ version: ctx.version, update_available: false }));
+  router.get('/remote_version', (req, res) => res.json({ version: `v${PAPERLESS_VERSION}`, update_available: false }));
   router.get('/statistics', (req, res) => {
     const { n, chars } = db.prepare('SELECT count(*) AS n, COALESCE(sum(length(content)), 0) AS chars FROM documents').get();
     res.json({

@@ -3,4 +3,5 @@ set -e
 if [ "$1" = "remove" ] && [ -d /run/systemd/system ]; then
   systemctl stop neopaperless.service || true
   systemctl disable neopaperless.service >/dev/null || true
+  systemctl disable --now neopaperless-update.timer neopaperless-update.path >/dev/null 2>&1 || true
 fi

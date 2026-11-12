@@ -1,0 +1,9 @@
+[Unit]
+Description=Mise à jour de NeoPaperless demandée depuis l'interface
+
+[Path]
+PathExists=/var/lib/neopaperless/update-request
+Unit=neopaperless-update.service
+
+[Install]
+WantedBy=multi-user.target

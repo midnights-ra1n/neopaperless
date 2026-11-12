@@ -244,6 +244,15 @@ function newerVersion(latest, current) {
   return false;
 }
 
+function updater() {
+  const mode = fs.existsSync('/usr/bin/neopaperless-update') ? 'deb' : fs.existsSync('/.dockerenv') ? 'docker' : 'manual';
+  const read = (name) => { try { return fs.readFileSync(path.join(DATA_DIR, name), 'utf8').trim(); } catch { return null; } };
+  return {
+    mode, auto: mode === 'deb' && !fs.existsSync(path.join(DATA_DIR, 'auto-update-off')),
+    pending: fs.existsSync(path.join(DATA_DIR, 'update-request')), last: read('update-status'),
+  };
+}
+
 // ---------- app ----------
 export function createApp() {
   const app = express();
@@ -515,9 +524,25 @@ export function createApp() {
     const release = await r.json();
     res.json({
       current: VERSION, latest: release.tag_name, url: release.html_url, notes: release.body || '',
-      available: newerVersion(release.tag_name || '0', VERSION),
+      available: newerVersion(release.tag_name || '0', VERSION), ...updater(),
     });
   }));
+
+  // Debian: a root-owned systemd timer/path unit (packaging/neopaperless-update) installs releases; this service only
+  // drops a request file and a switch file in DATA_DIR. Docker and manual installs cannot update themselves.
+  api.get('/update/status', (req, res) => res.json({ current: VERSION, ...updater() }));
+  api.post('/update/install', (req, res) => {
+    if (!req.user.is_admin) return res.status(403).json({ error: 'Réservé à l\'administrateur' });
+    if (updater().mode !== 'deb') return res.status(400).json({ error: 'Mise à jour automatique indisponible sur cette installation' });
+    fs.writeFileSync(path.join(DATA_DIR, 'update-request'), '');
+    res.status(202).json({ ok: true });
+  });
+  api.put('/update/auto', json, (req, res) => {
+    if (!req.user.is_admin) return res.status(403).json({ error: 'Réservé à l\'administrateur' });
+    const off = path.join(DATA_DIR, 'auto-update-off');
+    if (req.body?.enabled) fs.rmSync(off, { force: true }); else fs.writeFileSync(off, '');
+    res.json({ ok: true });
+  });
 
   np.use(api);
   // Native endpoints live under /api/np so /api/* can follow the Paperless-ngx API that third-party apps expect.

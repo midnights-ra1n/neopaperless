@@ -12,5 +12,8 @@ if [ "$1" = "configure" ]; then
     systemctl enable neopaperless.service >/dev/null
     # Restart picks up the new version on upgrades; schema migrations run at startup.
     systemctl restart neopaperless.service
+    # Mises à jour automatiques : recherche nocturne + déclenchement depuis l'interface.
+    systemctl enable neopaperless-update.timer neopaperless-update.path >/dev/null
+    systemctl start neopaperless-update.timer neopaperless-update.path || true
   fi
 fi

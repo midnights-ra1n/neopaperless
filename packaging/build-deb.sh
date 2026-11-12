@@ -36,6 +36,9 @@ for ARCH in "${ARCHES[@]}"; do
   tar -xJf "build/cache/$TARBALL" -C "$APP/node" --strip-components=1 "node-v$NODE_VERSION-linux-$NODE_ARCH/bin/node" "node-v$NODE_VERSION-linux-$NODE_ARCH/LICENSE"
 
   cp packaging/neopaperless.service "$ROOT/lib/systemd/system/"
+  cp packaging/neopaperless-update.service packaging/neopaperless-update.timer packaging/neopaperless-update.path "$ROOT/lib/systemd/system/"
+  mkdir -p "$ROOT/usr/bin"
+  install -m 755 packaging/neopaperless-update "$ROOT/usr/bin/neopaperless-update"
   cp packaging/default "$ROOT/etc/default/neopaperless"
   echo /etc/default/neopaperless > "$ROOT/DEBIAN/conffiles"
   cp packaging/debian/postinst packaging/debian/prerm packaging/debian/postrm "$ROOT/DEBIAN/"
@@ -46,7 +49,7 @@ Package: neopaperless
 Version: $VERSION
 Architecture: $ARCH
 Maintainer: NeoPaperless <noreply@localhost>
-Depends: poppler-utils, tar, adduser
+Depends: poppler-utils, tar, adduser, curl, ca-certificates
 Recommends: tesseract-ocr, tesseract-ocr-fra
 Section: web
 Priority: optional
