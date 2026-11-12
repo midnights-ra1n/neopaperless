@@ -9,6 +9,7 @@ import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { db, openDb, closeDb, ftsQuery, DATA_DIR, FILES_DIR, DB_PATH } from './db.js';
 import { extractText } from './extract.js';
+import { paperlessApi } from './paperless.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
@@ -37,17 +38,22 @@ function readCookie(req, name) {
   return match?.[1];
 }
 
-function startSession(req, res, userId) {
+function createSession(userId, days) {
   const token = crypto.randomBytes(32).toString('hex');
-  db.prepare('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)').run(
-    token, userId, Date.now() + SESSION_DAYS * 864e5);
+  db.prepare('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)').run(token, userId, Date.now() + days * 864e5);
+  return token;
+}
+
+function startSession(req, res, userId) {
+  const token = createSession(userId, SESSION_DAYS);
   res.cookie('np_session', token, {
     httpOnly: true, sameSite: 'lax', secure: req.secure, maxAge: SESSION_DAYS * 864e5, path: '/',
   });
 }
 
 function currentUser(req) {
-  const token = readCookie(req, 'np_session');
+  // Browser sessions use the cookie; Paperless-ngx clients send "Authorization: Token <token>".
+  const token = readCookie(req, 'np_session') || req.headers.authorization?.match(/^Token (\S+)$/i)?.[1];
   if (!token) return null;
   return db.prepare(`SELECT u.id, u.username, u.is_admin FROM sessions s JOIN users u ON u.id = s.user_id
                      WHERE s.token = ? AND s.expires_at > ?`).get(token, Date.now()) || null;
@@ -120,6 +126,44 @@ async function makeThumbnail(filePath, mime) {
   // pdftoppm appends ".png" to the output prefix.
   await execFileP('pdftoppm', ['-png', '-singlefile', '-f', '1', '-l', '1', '-scale-to', '480', filePath, `${filePath}.thumb`])
     .catch(() => {});
+}
+
+function sendThumb(res, doc) {
+  const thumb = path.join(FILES_DIR, `${doc.stored_name}.thumb.png`);
+  res.setHeader('Cache-Control', 'private, max-age=86400');
+  if (fs.existsSync(thumb)) return res.sendFile(thumb);
+  if (/^image\/(png|jpeg|gif|webp)$/.test(doc.mime)) return sendFile(res, doc, false);
+  res.status(404).end();
+}
+
+async function removeDoc(doc) {
+  db.prepare('DELETE FROM documents WHERE id = ?').run(doc.id);
+  const file = path.join(FILES_DIR, doc.stored_name);
+  await Promise.all([fsp.rm(file, { force: true }), fsp.rm(`${file}.thumb.png`, { force: true })]);
+}
+
+// Streams a file into storage and indexes it. Returns { id } or, for a known file, { duplicate: id }.
+async function ingest(stream, { filename, mime, folder, tags = [], title, docDate = null }) {
+  const ext = path.extname(filename).toLowerCase().replace(/[^.a-z0-9]/g, '');
+  const storedName = `${crypto.randomUUID()}${ext}`;
+  const filePath = path.join(FILES_DIR, storedName);
+  const hash = crypto.createHash('sha256');
+  let size = 0;
+  stream.on('data', (chunk) => { hash.update(chunk); size += chunk.length; });
+  await pipeline(stream, fs.createWriteStream(filePath));
+  const sha256 = hash.digest('hex');
+
+  const existing = db.prepare('SELECT id FROM documents WHERE sha256 = ?').get(sha256);
+  if (existing) {
+    await fsp.rm(filePath);
+    return { duplicate: existing.id };
+  }
+  const [content] = await Promise.all([extractText(filePath, mime), makeThumbnail(filePath, mime)]);
+  const name = title || path.basename(filename, path.extname(filename)).replace(/[_-]+/g, ' ').trim() || filename;
+  const { lastInsertRowid } = db.prepare(`INSERT INTO documents (title, filename, stored_name, mime, size, sha256, content, folder_id, doc_date)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(name, filename, storedName, mime, size, sha256, content, folderId(folder), docDate);
+  setTags(lastInsertRowid, tags);
+  return { id: lastInsertRowid };
 }
 
 // ---------- backup ----------
@@ -199,12 +243,14 @@ export function createApp() {
   const json = express.json({ limit: '1mb' });
   const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
-  app.get('/api/status', (req, res) => {
+  const np = express.Router();
+
+  np.get('/status', (req, res) => {
     const setupRequired = db.prepare('SELECT count(*) AS n FROM users').get().n === 0;
     res.json({ setupRequired, user: currentUser(req), version: VERSION });
   });
 
-  app.post('/api/setup', json, (req, res) => {
+  np.post('/setup', json, (req, res) => {
     if (db.prepare('SELECT count(*) AS n FROM users').get().n > 0) return res.status(403).json({ error: 'Déjà configuré' });
     const creds = validCredentials(req.body);
     if (creds.error) return res.status(400).json(creds);
@@ -214,7 +260,7 @@ export function createApp() {
     res.json({ ok: true });
   });
 
-  app.post('/api/login', json, (req, res) => {
+  np.post('/login', json, (req, res) => {
     if (tooManyFailures(req.ip)) return res.status(429).json({ error: 'Trop de tentatives, réessayez plus tard' });
     const user = db.prepare('SELECT * FROM users WHERE username = ?').get(String(req.body?.username || '').trim());
     if (!user || !verifyPassword(String(req.body?.password || ''), user.password_hash)) {
@@ -226,7 +272,7 @@ export function createApp() {
     res.json({ ok: true });
   });
 
-  app.post('/api/logout', (req, res) => {
+  np.post('/logout', (req, res) => {
     db.prepare('DELETE FROM sessions WHERE token = ?').run(readCookie(req, 'np_session') || '');
     res.clearCookie('np_session', { path: '/' });
     res.json({ ok: true });
@@ -287,27 +333,10 @@ export function createApp() {
   api.post('/documents', wrap(async (req, res) => {
     const filename = decodeURIComponent(String(req.headers['x-filename'] || 'document')).replace(/[/\\]/g, '_');
     const mime = String(req.headers['content-type'] || 'application/octet-stream').split(';')[0].toLowerCase();
-    const ext = path.extname(filename).toLowerCase().replace(/[^.a-z0-9]/g, '');
-    const storedName = `${crypto.randomUUID()}${ext}`;
-    const filePath = path.join(FILES_DIR, storedName);
-    const hash = crypto.createHash('sha256');
-    let size = 0;
-    req.on('data', (chunk) => { hash.update(chunk); size += chunk.length; });
-    await pipeline(req, fs.createWriteStream(filePath));
-    const sha256 = hash.digest('hex');
-
-    const existing = db.prepare('SELECT id FROM documents WHERE sha256 = ?').get(sha256);
-    if (existing) {
-      await fsp.rm(filePath);
-      return res.status(409).json({ error: 'Ce document existe déjà', id: existing.id });
-    }
-    const [content] = await Promise.all([extractText(filePath, mime), makeThumbnail(filePath, mime)]);
-    const title = path.basename(filename, path.extname(filename)).replace(/[_-]+/g, ' ').trim() || filename;
-    const { lastInsertRowid } = db.prepare(`INSERT INTO documents (title, filename, stored_name, mime, size, sha256, content, folder_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(title, filename, storedName, mime, size, sha256, content, folderId(req.headers['x-folder']));
     const tags = String(req.headers['x-tags'] || '').split(',').filter(Boolean);
-    setTags(lastInsertRowid, tags);
-    res.status(201).json(rowToDoc(getDoc(lastInsertRowid)));
+    const r = await ingest(req, { filename, mime, folder: req.headers['x-folder'], tags });
+    if (r.duplicate) return res.status(409).json({ error: 'Ce document existe déjà', id: r.duplicate });
+    res.status(201).json(rowToDoc(getDoc(r.id)));
   }));
 
   api.get('/documents/:id', (req, res) => {
@@ -333,9 +362,7 @@ export function createApp() {
   api.delete('/documents/:id', wrap(async (req, res) => {
     const doc = getDoc(req.params.id);
     if (!doc) return res.status(404).json({ error: 'Introuvable' });
-    db.prepare('DELETE FROM documents WHERE id = ?').run(doc.id);
-    const file = path.join(FILES_DIR, doc.stored_name);
-    await Promise.all([fsp.rm(file, { force: true }), fsp.rm(`${file}.thumb.png`, { force: true })]);
+    await removeDoc(doc);
     res.json({ ok: true });
   }));
 
@@ -348,11 +375,7 @@ export function createApp() {
   api.get('/documents/:id/thumb', (req, res) => {
     const doc = getDoc(req.params.id);
     if (!doc) return res.status(404).end();
-    const thumb = path.join(FILES_DIR, `${doc.stored_name}.thumb.png`);
-    res.setHeader('Cache-Control', 'private, max-age=86400');
-    if (fs.existsSync(thumb)) return res.sendFile(thumb);
-    if (/^image\/(png|jpeg|gif|webp)$/.test(doc.mime)) return sendFile(res, doc, false);
-    res.status(404).end();
+    sendThumb(res, doc);
   });
 
   api.get('/documents/:id/shares', (req, res) => {
@@ -468,7 +491,13 @@ export function createApp() {
     });
   }));
 
-  app.use('/api', api);
+  np.use(api);
+  // Native endpoints live under /api/np so /api/* can follow the Paperless-ngx API that third-party apps expect.
+  app.use('/api/np', np);
+  app.use('/api', paperlessApi({
+    json, wrap, currentUser, createSession, verifyPassword, tooManyFailures, recordFailure, getDoc, DOC_COLUMNS,
+    sendFile, sendThumb, removeDoc, ingest, setTags, folderId, version: VERSION, publicBase: process.env.PUBLIC_URL,
+  }));
 
   const dist = path.join(ROOT, 'dist');
   app.use(express.static(dist, { index: false, maxAge: '1h' }));

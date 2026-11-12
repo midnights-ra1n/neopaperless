@@ -14,6 +14,15 @@ React + TailwindCSS + SQLite, responsive et installable en PWA. Aucune ressource
 - **Sauvegarde / restauration** complète (base SQLite + fichiers) en une archive `.tar.gz`.
 - **Mises à jour** : vérification de nouvelle version depuis les paramètres ; migrations de schéma automatiques au démarrage.
 
+## Compatibilité Paperless-ngx
+
+L'API sous `/api/` reprend celle de Paperless-ngx : des applications comme Swift Paperless peuvent s'y connecter avec l'URL du serveur, l'identifiant et le mot de passe (`POST /api/token/`, puis `Authorization: Token …`).
+
+- Documents (liste, filtres, recherche, envoi, modification, téléchargement, miniatures) et tags : équivalents directs.
+- **Dossiers** = « chemins de stockage » (`Maison/Factures`) ; un dossier parent inclut ses sous-dossiers. Renommer depuis l'app ne déplace pas le dossier.
+- Correspondants, types de document, boîte de réception, notes, champs personnalisés et vues enregistrées ne sont pas gérés (listes vides).
+- L'API propre à l'interface web est sous `/api/np/`.
+
 ## Développement
 
 Prérequis : Node.js ≥ 22.13 (pour `node:sqlite`), `poppler-utils`, et éventuellement `tesseract-ocr`.
@@ -25,7 +34,7 @@ npm test         # tests de l'API
 npm run build && npm start   # production sur http://localhost:3001
 ```
 
-Variables d'environnement : `PORT` (3001), `HOST`, `DATA_DIR` (`./data`), `OCR_LANG` (`fra+eng`), `TRUST_PROXY` (`1` derrière un reverse proxy), `UPDATE_URL`.
+Variables d'environnement : `PORT` (3001), `HOST`, `DATA_DIR` (`./data`), `OCR_LANG` (`fra+eng`), `TRUST_PROXY` (`1` derrière un reverse proxy), `UPDATE_URL`, `PUBLIC_URL` (URL absolue des liens de pagination de l'API, si le proxy ne transmet pas l'hôte).
 
 ## Paquets Debian (amd64 / arm64)
 

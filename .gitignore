@@ -3,3 +3,4 @@ dist
 data
 build
 *.deb
+.DS_Store

@@ -116,7 +116,7 @@ function BackupSection() {
         Importez-la sur une autre installation pour tout retrouver.
       </p>
       <div className="flex flex-wrap gap-2">
-        <a className="btn-primary" href="/api/backup"><Download size={16} /> Télécharger une sauvegarde</a>
+        <a className="btn-primary" href="/api/np/backup"><Download size={16} /> Télécharger une sauvegarde</a>
         <button className="btn-ghost border border-zinc-200 dark:border-zinc-700" disabled={busy} onClick={() => input.current.click()}>
           {busy ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />} Restaurer
         </button>

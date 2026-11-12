@@ -12,7 +12,7 @@ function Thumb({ doc }) {
   const [failed, setFailed] = useState(false);
   const Icon = doc.mime === 'application/pdf' || doc.mime.startsWith('text/') ? FileText : doc.mime.startsWith('image/') ? Image : FileQuestion;
   if (failed) return <div className="grid h-full place-items-center text-zinc-300 dark:text-zinc-700"><Icon size={48} strokeWidth={1.25} /></div>;
-  return <img src={`/api/documents/${doc.id}/thumb`} alt="" loading="lazy" onError={() => setFailed(true)}
+  return <img src={`/api/np/documents/${doc.id}/thumb`} alt="" loading="lazy" onError={() => setFailed(true)}
     className="h-full w-full object-cover object-top transition duration-300 group-hover:scale-[1.03]" />;
 }
 

@@ -7,7 +7,7 @@ import { FolderSelect, TagChip } from './Documents.jsx';
 const PdfViewer = lazy(() => import('../components/PdfViewer.jsx'));
 
 function Preview({ doc }) {
-  const url = `/api/documents/${doc.id}/file`;
+  const url = `/api/np/documents/${doc.id}/file`;
   if (doc.mime === 'application/pdf') return <Suspense><PdfViewer url={url} /></Suspense>;
   if (/^image\/(png|jpeg|gif|webp)$/.test(doc.mime)) return <img src={url} alt={doc.title} className="mx-auto max-h-full object-contain p-4" />;
   if (doc.mime.startsWith('text/')) return <pre className="h-full overflow-auto whitespace-pre-wrap p-6 text-sm">{doc.content}</pre>;
@@ -125,7 +125,7 @@ export default function DocumentView() {
       <div className="mb-4 flex items-center gap-1">
         <button className="btn-ghost -ml-2 px-2" onClick={() => (history.length > 1 ? navigate(-1) : navigate('/'))}><ArrowLeft size={18} /> Retour</button>
         <div className="ml-auto flex gap-1">
-          <a className="btn-ghost p-2.5" href={`/api/documents/${doc.id}/file?download=1`} aria-label="Télécharger" title="Télécharger"><Download size={18} /></a>
+          <a className="btn-ghost p-2.5" href={`/api/np/documents/${doc.id}/file?download=1`} aria-label="Télécharger" title="Télécharger"><Download size={18} /></a>
           <button className="btn-ghost p-2.5" onClick={() => setSharing(true)} aria-label="Partager" title="Partager"><Share2 size={18} /></button>
           <button className="btn-danger p-2.5" onClick={remove} aria-label="Supprimer" title="Supprimer"><Trash2 size={18} /></button>
         </div>
