@@ -20,7 +20,11 @@ L'API sous `/api/` reprend celle de Paperless-ngx : des applications comme Swift
 
 - Documents (liste, filtres, recherche, envoi, modification, téléchargement, miniatures) et tags : équivalents directs.
 - **Dossiers** = « chemins de stockage » (`Maison/Factures`) ; un dossier parent inclut ses sous-dossiers. Renommer depuis l'app ne déplace pas le dossier.
-- Correspondants, types de document, boîte de réception, notes, champs personnalisés et vues enregistrées ne sont pas gérés (listes vides).
+- **Gérés** : correspondants, types de document, numéro d'archivage (ASN), notes, **champs personnalisés** (valeurs, filtres `custom_fields__id__*`, `custom_field_query`, tri `custom_field_<id>`, `bulk_edit modify_custom_fields`), **vues enregistrées**, **règles de correspondance automatique** (`match` / `matching_algorithm` 1 à 5, appliquées à l'envoi ; `suggestions/`), date `modified`, `documents/next_asn/`, `/api/status/`, `/api/`.
+- **Non gérés** : corbeille (la suppression est définitive, `trash` est vide), historique des modifications, algorithme « auto » (6, classifieur), groupes et permissions par objet (champs `owner`/`set_permissions` ignorés), comptes et règles de mail, workflows, `bulk_download`, `reprocess`.
+- **Jetons** : *Paramètres → Jetons d'API* crée des jetons nommés et révocables (affichés une seule fois). `POST /api/profile/generate_auth_token/` fonctionne aussi. Les en-têtes CORS sont ouverts sur `/api/` (authentification par `Authorization` uniquement).
+- **Liens de partage** : `POST /api/share_links/` → lien public `/share/<slug>`.
+- **Obsidian** : les plugins communautaires pour Paperless-ngx (*Paperless*, *Paperless Storage*, *Paperless Sync*) se configurent avec l'URL du serveur et un jeton. Non testés ici.
 - L'API propre à l'interface web est sous `/api/np/`.
 
 ## Développement

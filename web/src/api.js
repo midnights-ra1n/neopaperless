@@ -7,6 +7,13 @@ export async function api(path, opts = {}) {
   return data;
 }
 
+// Paperless-ngx-compatible endpoints (/api/...) share the session cookie; used for correspondents and document types.
+export const paperless = async (path, opts = {}) => {
+  const r = await fetch(`/api${path}`, { ...opts, headers: opts.body ? { 'content-type': 'application/json' } : undefined });
+  if (!r.ok) throw new Error(`Erreur ${r.status}`);
+  return r.status === 204 ? null : r.json();
+};
+
 export const send = (path, body, method = 'POST') => api(path, { method, body: JSON.stringify(body) });
 
 // XHR instead of fetch: fetch cannot report upload progress.

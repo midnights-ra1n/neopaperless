@@ -1,7 +1,7 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
-import { Plus, Trash2, Download, Upload, RefreshCw, KeyRound, Tags, Folder, DatabaseBackup, Sparkles, Loader2 } from 'lucide-react';
-import { api, send, upload, flattenFolders } from '../api.js';
+import { Plus, Trash2, Plug, Users, FileType, Download, Upload, RefreshCw, KeyRound, Tags, Folder, DatabaseBackup, Sparkles, Loader2 } from 'lucide-react';
+import { api, send, upload, flattenFolders, paperless } from '../api.js';
 import { FolderSelect } from './Documents.jsx';
 
 function Section({ icon: Icon, title, children }) {
@@ -181,6 +181,70 @@ function PasswordSection() {
   );
 }
 
+function NamedListSection({ path, title, icon }) {
+  const [items, setItems] = useState([]);
+  const [name, setName] = useState('');
+  const [msg, setMsg] = useState(null);
+  const load = () => paperless(`/${path}/?page_size=1000`).then((d) => setItems(d.results), (e) => setMsg({ text: e.message }));
+  useEffect(() => { load(); }, []);
+  const run = (p) => p.then(load, (e) => setMsg({ text: e.message }));
+  return (
+    <Section icon={icon} title={title}>
+      <form onSubmit={(e) => { e.preventDefault(); run(paperless(`/${path}/`, { method: 'POST', body: JSON.stringify({ name }) }).then(() => setName(''))); }} className="flex gap-3">
+        <input className="input" placeholder="Nouveau" required value={name} onChange={(e) => setName(e.target.value)} />
+        <button className="btn-primary">Ajouter</button>
+      </form>
+      <ul className="mt-3 divide-y divide-slate-200/60 dark:divide-white/10">
+        {items.map((o) => (
+          <li key={o.id} className="flex items-center justify-between py-2 text-sm">
+            <span>{o.name} <span className="text-xs text-slate-400">{o.document_count}</span></span>
+            <button aria-label={`Supprimer ${o.name}`} className="btn-ghost" onClick={() => run(paperless(`/${path}/${o.id}/`, { method: 'DELETE' }))}><Trash2 size={15} /></button>
+          </li>
+        ))}
+      </ul>
+      <Message msg={msg} />
+    </Section>
+  );
+}
+
+function TokensSection() {
+  const [tokens, setTokens] = useState([]);
+  const [name, setName] = useState('');
+  const [created, setCreated] = useState(null);
+  const [msg, setMsg] = useState(null);
+  const load = () => api('/tokens').then(setTokens).catch((e) => setMsg({ text: e.message }));
+  useEffect(() => { load(); }, []);
+  async function create(e) {
+    e.preventDefault();
+    try {
+      setCreated((await send('/tokens', { name })).token);
+      setName('');
+      load();
+    } catch (err) {
+      setMsg({ text: err.message });
+    }
+  }
+  return (
+    <Section icon={Plug} title="Jetons d'API (Obsidian, applications)">
+      <p className="mb-3 text-sm text-slate-500">Un jeton remplace le mot de passe pour les plugins compatibles Paperless-ngx : URL du serveur + jeton.</p>
+      <form onSubmit={create} className="flex gap-3">
+        <input className="input" placeholder="Nom (ex. Obsidian)" required maxLength={60} value={name} onChange={(e) => setName(e.target.value)} />
+        <button className="btn-primary">Créer</button>
+      </form>
+      {created && <p className="mt-3 break-all rounded-lg bg-amber-500/10 p-3 font-mono text-xs">Copiez-le maintenant, il ne sera plus affiché : {created}</p>}
+      <ul className="mt-3 divide-y divide-slate-200/60 dark:divide-white/10">
+        {tokens.map((t) => (
+          <li key={t.id} className="flex items-center justify-between py-2 text-sm">
+            <span>{t.name} <span className="font-mono text-xs text-slate-400">…{t.hint}</span></span>
+            <button aria-label={`Révoquer ${t.name}`} className="btn-ghost" onClick={() => send(`/tokens/${t.id}`, {}, 'DELETE').then(load)}><Trash2 size={15} /></button>
+          </li>
+        ))}
+      </ul>
+      <Message msg={msg} />
+    </Section>
+  );
+}
+
 export default function Settings() {
   return (
     <div className="mx-auto max-w-3xl space-y-5">
@@ -189,6 +253,9 @@ export default function Settings() {
       <TagsSection />
       <BackupSection />
       <UpdateSection />
+      <NamedListSection path="correspondents" title="Correspondants" icon={Users} />
+      <NamedListSection path="document_types" title="Types de document" icon={FileType} />
+      <TokensSection />
       <PasswordSection />
     </div>
   );

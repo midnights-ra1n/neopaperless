@@ -55,6 +55,44 @@ export const MIGRATIONS = [
    DELETE FROM tags WHERE id NOT IN (SELECT tag_id FROM document_tags);
    DELETE FROM folders WHERE id IN (SELECT id FROM tags)
      AND id NOT IN (SELECT folder_id FROM documents WHERE folder_id IS NOT NULL);`,
+  // API tokens are sessions with a name: long-lived, listed in the settings, revocable one by one.
+  `ALTER TABLE sessions ADD COLUMN name TEXT;`,
+  // Paperless-ngx concepts third-party tools rely on: correspondents, document types, archive serial number, notes.
+  `CREATE TABLE correspondents (id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL COLLATE NOCASE);
+   CREATE TABLE document_types (id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL COLLATE NOCASE);
+   ALTER TABLE documents ADD COLUMN correspondent_id INTEGER REFERENCES correspondents(id) ON DELETE SET NULL;
+   ALTER TABLE documents ADD COLUMN document_type_id INTEGER REFERENCES document_types(id) ON DELETE SET NULL;
+   ALTER TABLE documents ADD COLUMN asn INTEGER;
+   CREATE UNIQUE INDEX documents_asn ON documents(asn) WHERE asn IS NOT NULL;
+   CREATE TABLE document_notes (
+     id INTEGER PRIMARY KEY, document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, note TEXT NOT NULL,
+     created_at TEXT NOT NULL DEFAULT (datetime('now')));
+   CREATE INDEX document_notes_doc ON document_notes(document_id);`,
+  // Automatic matching rules, custom fields, saved views and a real "modified" date.
+  `ALTER TABLE tags ADD COLUMN match TEXT NOT NULL DEFAULT '';
+   ALTER TABLE tags ADD COLUMN matching_algorithm INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE tags ADD COLUMN is_insensitive INTEGER NOT NULL DEFAULT 1;
+   ALTER TABLE correspondents ADD COLUMN match TEXT NOT NULL DEFAULT '';
+   ALTER TABLE correspondents ADD COLUMN matching_algorithm INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE correspondents ADD COLUMN is_insensitive INTEGER NOT NULL DEFAULT 1;
+   ALTER TABLE document_types ADD COLUMN match TEXT NOT NULL DEFAULT '';
+   ALTER TABLE document_types ADD COLUMN matching_algorithm INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE document_types ADD COLUMN is_insensitive INTEGER NOT NULL DEFAULT 1;
+   ALTER TABLE folders ADD COLUMN match TEXT NOT NULL DEFAULT '';
+   ALTER TABLE folders ADD COLUMN matching_algorithm INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE folders ADD COLUMN is_insensitive INTEGER NOT NULL DEFAULT 1;
+   ALTER TABLE documents ADD COLUMN modified TEXT;
+   CREATE TABLE custom_fields (
+     id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL COLLATE NOCASE, data_type TEXT NOT NULL, extra_data TEXT NOT NULL DEFAULT '{}');
+   CREATE TABLE document_custom_fields (
+     document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+     field_id INTEGER NOT NULL REFERENCES custom_fields(id) ON DELETE CASCADE,
+     value TEXT NOT NULL DEFAULT 'null', PRIMARY KEY (document_id, field_id));
+   CREATE TABLE saved_views (
+     id INTEGER PRIMARY KEY, name TEXT NOT NULL, show_on_dashboard INTEGER NOT NULL DEFAULT 0,
+     show_in_sidebar INTEGER NOT NULL DEFAULT 0, sort_field TEXT, sort_reverse INTEGER NOT NULL DEFAULT 0,
+     filter_rules TEXT NOT NULL DEFAULT '[]');`,
 ];
 
 export let db;

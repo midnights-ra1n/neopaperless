@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { Link, useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import { ArrowLeft, Download, Share2, Trash2, Copy, Check, X, Save, Link2 } from 'lucide-react';
-import { api, send, formatDate, formatSize } from '../api.js';
+import { api, send, paperless, formatDate, formatSize } from '../api.js';
 import { FolderSelect, TagChip } from './Documents.jsx';
 
 const PdfViewer = lazy(() => import('../components/PdfViewer.jsx'));
@@ -89,11 +89,18 @@ export default function DocumentView() {
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
   const [sharing, setSharing] = useState(false);
+  const [lists, setLists] = useState({ correspondents: [], document_types: [] });
+
+  useEffect(() => {
+    Promise.all(['correspondents', 'document_types'].map((k) => paperless(`/${k}/?page_size=1000`)))
+      .then(([c, t]) => setLists({ correspondents: c.results, document_types: t.results }), () => {});
+  }, []);
 
   useEffect(() => {
     api(`/documents/${id}`).then((d) => {
       setDoc(d);
-      setForm({ title: d.title, notes: d.notes, doc_date: d.doc_date || '', folder_id: d.folder_id ?? '', tags: d.tags });
+      setForm({ title: d.title, notes: d.notes, doc_date: d.doc_date || '', folder_id: d.folder_id ?? '', tags: d.tags,
+        correspondent_id: d.correspondent_id ?? '', document_type_id: d.document_type_id ?? '' });
     }, (e) => setError(e.message));
   }, [id]);
 
@@ -101,7 +108,8 @@ export default function DocumentView() {
   if (!doc) return null;
 
   const dirty = form.title !== doc.title || form.notes !== doc.notes || form.doc_date !== (doc.doc_date || '')
-    || form.folder_id !== (doc.folder_id ?? '')
+    || form.folder_id !== (doc.folder_id ?? '') || form.correspondent_id !== (doc.correspondent_id ?? '')
+    || form.document_type_id !== (doc.document_type_id ?? '')
     || [...form.tags].sort().join() !== [...doc.tags].sort().join();
   const toggle = (tagId) => setForm({ ...form, tags: form.tags.includes(tagId) ? form.tags.filter((t) => t !== tagId) : [...form.tags, tagId] });
 
@@ -151,6 +159,15 @@ export default function DocumentView() {
               <FolderSelect id="folder" folders={folders} value={form.folder_id}
                 onChange={(e) => setForm({ ...form, folder_id: Number(e.target.value) || '' })} />
             </div>
+            {[['correspondent_id', 'Correspondant', lists.correspondents], ['document_type_id', 'Type de document', lists.document_types]].map(([key, label, items]) => (
+              <div key={key}>
+                <label className="label" htmlFor={key}>{label}</label>
+                <select id={key} className="input" value={form[key]} onChange={(e) => setForm({ ...form, [key]: Number(e.target.value) || '' })}>
+                  <option value="">—</option>
+                  {items.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                </select>
+              </div>
+            ))}
             <div>
               <p className="label">Tags</p>
               <div className="flex flex-wrap gap-1.5">

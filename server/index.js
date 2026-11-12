@@ -8,6 +8,7 @@ import { execFile, spawn } from 'node:child_process';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { db, openDb, closeDb, ftsQuery, DATA_DIR, FILES_DIR, DB_PATH } from './db.js';
+import { autoAssign } from './matching.js';
 import { extractText } from './extract.js';
 import { paperlessApi } from './paperless.js';
 
@@ -38,9 +39,9 @@ function readCookie(req, name) {
   return match?.[1];
 }
 
-function createSession(userId, days) {
+function createSession(userId, days, name = null) {
   const token = crypto.randomBytes(32).toString('hex');
-  db.prepare('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)').run(token, userId, Date.now() + days * 864e5);
+  db.prepare('INSERT INTO sessions (token, user_id, expires_at, name) VALUES (?, ?, ?, ?)').run(token, userId, Date.now() + days * 864e5, name);
   return token;
 }
 
@@ -87,7 +88,7 @@ function recordFailure(ip) {
 }
 
 // ---------- documents ----------
-const DOC_COLUMNS = `d.id, d.title, d.filename, d.mime, d.size, d.doc_date, d.added_at, d.notes, d.folder_id,
+const DOC_COLUMNS = `d.id, d.title, d.filename, d.mime, d.size, d.doc_date, d.added_at, d.notes, d.folder_id, d.correspondent_id, d.document_type_id, d.asn, d.modified,
   (SELECT json_group_array(tag_id) FROM document_tags WHERE document_id = d.id) AS tags`;
 
 function rowToDoc(row) {
@@ -143,7 +144,9 @@ async function removeDoc(doc) {
 }
 
 // Streams a file into storage and indexes it. Returns { id } or, for a known file, { duplicate: id }.
-async function ingest(stream, { filename, mime, folder, tags = [], title, docDate = null }) {
+const existingId = (table, v) => db.prepare(`SELECT id FROM ${table} WHERE id = ?`).get(Number(v) || 0)?.id ?? null;
+
+async function ingest(stream, { filename, mime, folder, tags = [], title, docDate = null, correspondent, documentType, asn, customFields = [] }) {
   const ext = path.extname(filename).toLowerCase().replace(/[^.a-z0-9]/g, '');
   const storedName = `${crypto.randomUUID()}${ext}`;
   const filePath = path.join(FILES_DIR, storedName);
@@ -160,9 +163,15 @@ async function ingest(stream, { filename, mime, folder, tags = [], title, docDat
   }
   const [content] = await Promise.all([extractText(filePath, mime), makeThumbnail(filePath, mime)]);
   const name = title || path.basename(filename, path.extname(filename)).replace(/[_-]+/g, ' ').trim() || filename;
-  const { lastInsertRowid } = db.prepare(`INSERT INTO documents (title, filename, stored_name, mime, size, sha256, content, folder_id, doc_date)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(name, filename, storedName, mime, size, sha256, content, folderId(folder), docDate);
+  const [corr, type, fid] = [existingId('correspondents', correspondent), existingId('document_types', documentType), folderId(folder)];
+  const takenAsn = !asn || db.prepare('SELECT 1 FROM documents WHERE asn = ?').get(Number(asn)); // a taken ASN is dropped, the file is kept
+  const { lastInsertRowid } = db.prepare(`INSERT INTO documents (title, filename, stored_name, mime, size, sha256, content, folder_id, doc_date,
+      correspondent_id, document_type_id, asn) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(name, filename, storedName, mime, size, sha256, content, fid, docDate, corr, type, takenAsn ? null : Number(asn));
   setTags(lastInsertRowid, tags);
+  const addField = db.prepare('INSERT OR IGNORE INTO document_custom_fields (document_id, field_id) SELECT ?, id FROM custom_fields WHERE id = ?');
+  for (const f of customFields) addField.run(lastInsertRowid, Number(f));
+  autoAssign(lastInsertRowid, content, { hasCorrespondent: !!corr, hasType: !!type, hasFolder: !!fid });
   return { id: lastInsertRowid };
 }
 
@@ -279,7 +288,7 @@ export function createApp() {
   });
 
   // Public share links: no auth, token is the secret.
-  app.get('/s/:token', (req, res) => {
+  app.get(['/s/:token', '/share/:token'], (req, res) => {
     const share = db.prepare('SELECT * FROM shares WHERE token = ? AND (expires_at IS NULL OR expires_at > ?)')
       .get(req.params.token, Date.now());
     if (!share) return res.status(404).send('Lien de partage invalide ou expiré');
@@ -288,6 +297,22 @@ export function createApp() {
 
   const api = express.Router();
   api.use(requireAuth);
+
+  api.get('/tokens', (req, res) => {
+    res.json(db.prepare('SELECT rowid AS id, name, substr(token, -4) AS hint FROM sessions WHERE user_id = ? AND name IS NOT NULL ORDER BY rowid')
+      .all(req.user.id));
+  });
+
+  api.post('/tokens', json, (req, res) => {
+    const name = String(req.body?.name || '').trim().slice(0, 60);
+    if (!name) return res.status(400).json({ error: 'Nom requis' });
+    res.status(201).json({ token: createSession(req.user.id, 3650, name) }); // shown once, like a password
+  });
+
+  api.delete('/tokens/:id', (req, res) => {
+    db.prepare('DELETE FROM sessions WHERE rowid = ? AND user_id = ? AND name IS NOT NULL').run(req.params.id, req.user.id);
+    res.json({ ok: true });
+  });
 
   api.post('/password', json, (req, res) => {
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
@@ -354,7 +379,10 @@ export function createApp() {
     const notes = b.notes !== undefined ? String(b.notes) : doc.notes;
     const docDate = b.doc_date !== undefined ? (/^\d{4}-\d{2}-\d{2}$/.test(b.doc_date) ? b.doc_date : null) : doc.doc_date;
     const folder = b.folder_id !== undefined ? folderId(b.folder_id) : doc.folder_id;
-    db.prepare('UPDATE documents SET title = ?, notes = ?, doc_date = ?, folder_id = ? WHERE id = ?').run(title, notes, docDate, folder, doc.id);
+    const link = (key, table, current) => (b[key] !== undefined ? existingId(table, b[key]) : current);
+    db.prepare(`UPDATE documents SET title = ?, notes = ?, doc_date = ?, folder_id = ?, correspondent_id = ?, document_type_id = ?,
+      modified = datetime('now') WHERE id = ?`).run(title, notes, docDate, folder,
+      link('correspondent_id', 'correspondents', doc.correspondent_id), link('document_type_id', 'document_types', doc.document_type_id), doc.id);
     if (Array.isArray(b.tags)) setTags(doc.id, b.tags);
     res.json(rowToDoc(getDoc(doc.id)));
   });

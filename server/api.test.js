@@ -141,6 +141,57 @@ test('Paperless-ngx compatible API: token, upload, filters, storage paths', asyn
   assert.equal((await (await call('/documents/?correspondent__id=1')).json()).count, 0);
   assert.equal((await (await call('/documents/?title__icontains=zzz')).json()).count, 0);
   assert.equal((await call(`/documents/${res.results[0].id}/download/`)).status, 200);
+
+  // Correspondents, document types, ASN, notes
+  const corr = await (await call('/correspondents/', body({ name: 'EDF' }))).json();
+  const type = await (await call('/document_types/', body({ name: 'Facture' }))).json();
+  assert.equal((await call('/correspondents/', body({ name: 'edf' }))).status, 400);
+  const docId = res.results[0].id;
+  assert.equal(await (await call('/documents/next_asn/')).json(), 1);
+  const patched = await (await call(`/documents/${docId}/`, body({ correspondent: corr.id, document_type: type.id, archive_serial_number: 7 }, 'PATCH'))).json();
+  assert.deepEqual([patched.correspondent, patched.document_type, patched.archive_serial_number], [corr.id, type.id, 7]);
+  assert.equal((await call(`/documents/${docId}/`, body({ archive_serial_number: 7 }, 'PATCH'))).status, 200);
+  assert.equal((await (await call(`/documents/?correspondent__id=${corr.id}&archive_serial_number=7`)).json()).count, 1);
+  assert.ok(!(await (await call(`/documents/?document_type__id__none=${type.id}`)).json()).all.includes(docId));
+  assert.equal((await (await call('/correspondents/')).json()).results[0].document_count, 1);
+  const notes = await (await call(`/documents/${docId}/notes/`, body({ note: 'À payer' }))).json();
+  assert.equal(notes[0].note, 'À payer');
+  assert.equal((await (await call(`/documents/${docId}/`)).json()).notes[0].user.username, 'admin');
+  assert.equal((await (await call(`/documents/${docId}/notes/?id=${notes[0].id}`, { method: 'DELETE' })).json()).length, 0);
+  assert.equal((await (await call('/status/')).json()).database.status, 'OK');
+  assert.ok((await (await call('/')).json()).documents);
+
+  // Custom fields, custom_field_query, saved views, matching rules
+  const cf = await (await call('/custom_fields/', body({ name: 'Montant', data_type: 'integer' }))).json();
+  assert.equal((await call('/custom_fields/', body({ name: 'X', data_type: 'nope' }))).status, 400);
+  assert.equal((await call(`/documents/${docId}/`, body({ custom_fields: [{ field: cf.id, value: 'abc' }] }, 'PATCH'))).status, 400);
+  const withCf = await (await call(`/documents/${docId}/`, body({ custom_fields: [{ field: cf.id, value: 42 }] }, 'PATCH'))).json();
+  assert.deepEqual(withCf.custom_fields, [{ field: cf.id, value: 42 }]);
+  const q = (x) => `/documents/?custom_field_query=${encodeURIComponent(JSON.stringify(x))}`;
+  assert.equal((await (await call(q(['Montant', 'gt', 40]))).json()).count, 1);
+  assert.equal((await (await call(q(['AND', [[cf.id, 'exact', 42], ['NOT', ['Montant', 'lt', 10]]]]))).json()).count, 1);
+  assert.equal((await (await call(q([cf.id, 'exact', 7]))).json()).count, 0);
+  assert.equal((await (await call(`/documents/?custom_fields__id__all=${cf.id}`)).json()).count, 1);
+  const view = await (await call('/saved_views/', body({ name: 'Gros', show_on_dashboard: true, filter_rules: [{ rule_type: 0, value: 'x' }] }))).json();
+  assert.deepEqual((await (await call(`/saved_views/${view.id}/`)).json()).filter_rules, [{ rule_type: 0, value: 'x' }]);
+  assert.ok((await (await call(`/documents/${docId}/`)).json()).modified);
+  await call('/correspondents/', body({ name: 'Notaire', match: 'testament', matching_algorithm: 1, is_insensitive: true }));
+  await call('/tags/', body({ name: 'Auto', match: '^Acte.*notari', matching_algorithm: 4 }));
+  const f2 = new FormData();
+  f2.set('document', new Blob(['Acte notarié: testament de famille'], { type: 'text/plain' }), 'acte.txt');
+  const t2 = await (await call('/documents/post_document/', { method: 'POST', body: f2 })).json();
+  const d2 = await (await call(`/documents/${(await (await call(`/tasks/?task_id=${t2}`)).json())[0].related_document}/`)).json();
+  assert.ok(d2.correspondent && d2.tags.length === 1, 'matching rules applied at upload');
+  assert.deepEqual((await (await call(`/documents/${d2.id}/suggestions/`)).json()).correspondents, [d2.correspondent]);
+
+  // Profile token (what Obsidian plugins ask for), CORS preflight, share link
+  assert.equal((await call('/documents/', { method: 'OPTIONS' })).headers.get('access-control-allow-origin'), '*');
+  const apiToken = await (await call('/profile/generate_auth_token/', { method: 'POST' })).json();
+  assert.equal((await (await call('/profile/')).json()).auth_token, apiToken);
+  const viaToken = await fetch(`${base}/documents/?query=logement`, { headers: { authorization: `Token ${apiToken}` } });
+  assert.equal((await viaToken.json()).count, 1);
+  const link = await (await call('/share_links/', body({ document: res.results[0].id, expiration: null, file_version: 'archive' }))).json();
+  assert.equal((await fetch(`${base.replace('/api', '')}/share/${link.slug}`)).status, 200);
   assert.equal((await call(`/documents/${res.results[0].id}/`, { method: 'DELETE' })).status, 204);
   assert.equal((await call(`/documents/${res.results[0].id}/`)).status, 404);
 });
